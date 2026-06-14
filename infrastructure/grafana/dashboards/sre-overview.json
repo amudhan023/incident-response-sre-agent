@@ -1,0 +1,112 @@
+{
+  "title": "SRE Agent — Service Overview",
+  "uid": "sre-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "row", "title": "API Gateway", "gridPos": {"h":1,"w":24,"x":0,"y":0}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Request Rate (rps)",
+      "gridPos": {"h":6,"w":8,"x":0,"y":1},
+      "targets": [{"expr":"service_request_rate{service=\"api-gateway\"}","legendFormat":"api-gateway"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Error Rate (%)",
+      "gridPos": {"h":6,"w":8,"x":8,"y":1},
+      "targets": [{"expr":"service_error_rate_percent{service=\"api-gateway\"}","legendFormat":"api-gateway"}],
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults":{"thresholds":{"steps":[{"color":"green","value":null},{"color":"yellow","value":1},{"color":"red","value":5}]}}}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "P99 Latency (ms)",
+      "gridPos": {"h":6,"w":8,"x":16,"y":1},
+      "targets": [{"expr":"service_latency_p99_ms{service=\"api-gateway\"}","legendFormat":"api-gateway"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 10, "type": "row", "title": "Payment Service", "gridPos": {"h":1,"w":24,"x":0,"y":7}
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Request Rate (rps)",
+      "gridPos": {"h":6,"w":8,"x":0,"y":8},
+      "targets": [{"expr":"service_request_rate{service=\"payment-service\"}","legendFormat":"payment-service"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Error Rate (%)",
+      "gridPos": {"h":6,"w":8,"x":8,"y":8},
+      "targets": [{"expr":"service_error_rate_percent{service=\"payment-service\"}","legendFormat":"payment-service"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "P99 Latency (ms)",
+      "gridPos": {"h":6,"w":8,"x":16,"y":8},
+      "targets": [{"expr":"service_latency_p99_ms{service=\"payment-service\"}","legendFormat":"payment-service"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 20, "type": "row", "title": "Order Service", "gridPos": {"h":1,"w":24,"x":0,"y":14}
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "Request Rate (rps)",
+      "gridPos": {"h":6,"w":8,"x":0,"y":15},
+      "targets": [{"expr":"service_request_rate{service=\"order-service\"}","legendFormat":"order-service"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 22, "type": "timeseries", "title": "Error Rate (%)",
+      "gridPos": {"h":6,"w":8,"x":8,"y":15},
+      "targets": [{"expr":"service_error_rate_percent{service=\"order-service\"}","legendFormat":"order-service"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 23, "type": "timeseries", "title": "Kafka Consumer Lag",
+      "gridPos": {"h":6,"w":8,"x":16,"y":15},
+      "targets": [{"expr":"kafka_consumer_lag{service=\"order-service\"}","legendFormat":"order-service"}],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 30, "type": "row", "title": "Resources", "gridPos": {"h":1,"w":24,"x":0,"y":21}
+    },
+    {
+      "id": 31, "type": "timeseries", "title": "CPU Usage (%)",
+      "gridPos": {"h":6,"w":12,"x":0,"y":22},
+      "targets": [
+        {"expr":"service_cpu_percent{service=\"api-gateway\"}","legendFormat":"api-gateway"},
+        {"expr":"service_cpu_percent{service=\"payment-service\"}","legendFormat":"payment-service"},
+        {"expr":"service_cpu_percent{service=\"order-service\"}","legendFormat":"order-service"}
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 32, "type": "timeseries", "title": "Memory Usage (%)",
+      "gridPos": {"h":6,"w":12,"x":12,"y":22},
+      "targets": [
+        {"expr":"service_memory_percent{service=\"notification-service\"}","legendFormat":"notification-service"},
+        {"expr":"service_memory_percent{service=\"payment-service\"}","legendFormat":"payment-service"},
+        {"expr":"service_memory_percent{service=\"user-service\"}","legendFormat":"user-service"}
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 40, "type": "timeseries", "title": "DB Connections Active",
+      "gridPos": {"h":6,"w":12,"x":0,"y":28},
+      "targets": [
+        {"expr":"service_db_connections{service=\"payment-service\"}","legendFormat":"payment-service"},
+        {"expr":"service_db_connections{service=\"order-service\"}","legendFormat":"order-service"}
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 41, "type": "stat", "title": "Failure Injections",
+      "gridPos": {"h":6,"w":12,"x":12,"y":28},
+      "targets": [{"expr":"failure_injections_total","legendFormat":"Total Failures Injected"}],
+      "datasource": "Prometheus"
+    }
+  ]
+}

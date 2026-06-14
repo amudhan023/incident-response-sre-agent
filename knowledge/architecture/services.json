@@ -1,0 +1,129 @@
+{
+  "services": [
+    {
+      "name": "api-gateway",
+      "description": "Central API gateway. Routes all external traffic to internal microservices. Handles TLS termination, rate limiting, authentication, and request routing.",
+      "team": "platform-team",
+      "criticality": "P0",
+      "language": "Go",
+      "sla": {"p99_latency_ms": 200, "error_rate_percent": 0.5, "availability": 99.99},
+      "dependencies_upstream": [],
+      "dependencies_downstream": ["payment-service", "order-service", "user-service"],
+      "typical_metrics": {
+        "request_rate_rps": 150,
+        "error_rate_percent": 0.3,
+        "latency_p99_ms": 120,
+        "cpu_percent": 30,
+        "memory_percent": 40
+      },
+      "common_failure_modes": ["TLS certificate expiry", "Upstream service timeout", "CPU saturation from RegEx", "OOM from WebSocket accumulation"],
+      "on_call": "platform-oncall",
+      "runbooks": ["high-latency-api", "cpu-saturation", "error-rate-spike"]
+    },
+    {
+      "name": "payment-service",
+      "description": "Handles all payment processing. Integrates with external banking APIs. Manages transaction lifecycle, refunds, and payment state machine.",
+      "team": "payments-team",
+      "criticality": "P0",
+      "language": "Java (Spring Boot)",
+      "sla": {"p99_latency_ms": 500, "error_rate_percent": 0.1, "availability": 99.99},
+      "dependencies_upstream": ["api-gateway", "order-service"],
+      "dependencies_downstream": ["postgres", "redis", "banking-api-external"],
+      "typical_metrics": {
+        "request_rate_rps": 80,
+        "error_rate_percent": 0.1,
+        "latency_p99_ms": 380,
+        "cpu_percent": 22,
+        "memory_percent": 65,
+        "db_connections": 30
+      },
+      "common_failure_modes": ["DB connection exhaustion", "Banking API slowness", "JVM GC pauses", "Connection leaks", "High latency during deployments"],
+      "on_call": "payments-oncall",
+      "runbooks": ["high-latency-api", "database-connection-exhaustion", "deployment-rollback", "cpu-saturation"]
+    },
+    {
+      "name": "order-service",
+      "description": "Core order management. Creates, updates, and tracks orders through fulfillment lifecycle. Publishes order events to Kafka for downstream processing.",
+      "team": "commerce-team",
+      "criticality": "P0",
+      "language": "Python (FastAPI)",
+      "sla": {"p99_latency_ms": 400, "error_rate_percent": 0.5, "availability": 99.95},
+      "dependencies_upstream": ["api-gateway"],
+      "dependencies_downstream": ["payment-service", "inventory-service", "kafka", "postgres"],
+      "typical_metrics": {
+        "request_rate_rps": 60,
+        "error_rate_percent": 0.4,
+        "latency_p99_ms": 280,
+        "cpu_percent": 20,
+        "memory_percent": 50,
+        "db_connections": 15,
+        "kafka_consumer_lag": 100
+      },
+      "common_failure_modes": ["Kafka consumer lag from slow inventory calls", "Payment service timeout cascade", "Order processor NullPointerException"],
+      "on_call": "commerce-oncall",
+      "runbooks": ["kafka-consumer-lag", "error-rate-spike", "high-latency-api"]
+    },
+    {
+      "name": "user-service",
+      "description": "User authentication, profile management, and session handling. Issues and validates JWT tokens for all other services.",
+      "team": "identity-team",
+      "criticality": "P1",
+      "language": "Node.js (Express)",
+      "sla": {"p99_latency_ms": 300, "error_rate_percent": 0.5, "availability": 99.9},
+      "dependencies_upstream": ["api-gateway"],
+      "dependencies_downstream": ["postgres", "redis"],
+      "typical_metrics": {
+        "request_rate_rps": 200,
+        "error_rate_percent": 0.2,
+        "latency_p99_ms": 150,
+        "cpu_percent": 18,
+        "memory_percent": 45
+      },
+      "common_failure_modes": ["JWT secret misconfiguration", "Redis connection saturation", "Database latency during user lookups"],
+      "on_call": "identity-oncall",
+      "runbooks": ["error-rate-spike", "deployment-rollback", "high-latency-api"]
+    },
+    {
+      "name": "notification-service",
+      "description": "Handles all outbound notifications: email, SMS, push notifications. Consumes events from Kafka and routes to appropriate notification channels.",
+      "team": "platform-team",
+      "criticality": "P1",
+      "language": "Python",
+      "sla": {"p99_latency_ms": 1000, "error_rate_percent": 1.0, "availability": 99.9},
+      "dependencies_upstream": ["kafka"],
+      "dependencies_downstream": ["kafka", "email-provider-external", "sms-provider-external"],
+      "typical_metrics": {
+        "request_rate_rps": 40,
+        "error_rate_percent": 0.5,
+        "latency_p99_ms": 500,
+        "cpu_percent": 15,
+        "memory_percent": 55,
+        "kafka_consumer_lag": 200
+      },
+      "common_failure_modes": ["Memory leak from unbounded queue", "Kafka poison pill causing consumer crash", "External provider rate limiting"],
+      "on_call": "platform-oncall",
+      "runbooks": ["memory-leak", "kafka-consumer-lag"]
+    },
+    {
+      "name": "inventory-service",
+      "description": "Manages product inventory counts, reservations, and stock levels. Provides inventory check API used by order-service.",
+      "team": "commerce-team",
+      "criticality": "P1",
+      "language": "Python (FastAPI)",
+      "sla": {"p99_latency_ms": 400, "error_rate_percent": 1.0, "availability": 99.9},
+      "dependencies_upstream": ["order-service"],
+      "dependencies_downstream": ["postgres"],
+      "typical_metrics": {
+        "request_rate_rps": 30,
+        "error_rate_percent": 0.3,
+        "latency_p99_ms": 220,
+        "cpu_percent": 15,
+        "memory_percent": 40,
+        "db_connections": 10
+      },
+      "common_failure_modes": ["Database connection exhaustion during migrations", "Single replica SPOF"],
+      "on_call": "commerce-oncall",
+      "runbooks": ["database-connection-exhaustion", "error-rate-spike"]
+    }
+  ]
+}

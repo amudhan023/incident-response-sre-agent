@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRE Agent Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #6e7681; --accent: #58a6ff;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149; --orange: #f0883e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; font-weight: 700; }
+  .live-dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 0; height: calc(100vh - 57px); overflow: hidden; }
+  .main { overflow-y: auto; padding: 20px; }
+  .sidebar { border-left: 1px solid var(--border); overflow-y: auto; padding: 16px; background: var(--surface); }
+  .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table th { text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); border-bottom: 1px solid var(--border); }
+  table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  table tr:hover td { background: rgba(255,255,255,.02); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.CRITICAL { background: rgba(248,81,73,.15); color: var(--red); }
+  .badge.HIGH     { background: rgba(240,136,62,.15); color: var(--orange); }
+  .badge.MEDIUM   { background: rgba(210,153,34,.15); color: var(--yellow); }
+  .badge.LOW      { background: rgba(63,185,80,.15); color: var(--green); }
+  .badge.RESOLVED { background: rgba(63,185,80,.15); color: var(--green); }
+  .badge.DETECTING, .badge.CORRELATING, .badge.INVESTIGATING { background: rgba(88,166,255,.15); color: var(--accent); }
+  .badge.RCA_COMPLETE, .badge.REMEDIATING { background: rgba(210,153,34,.15); color: var(--yellow); }
+  .event-feed { display: flex; flex-direction: column; gap: 8px; }
+  .event-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+  .event-item .evt-type { font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.5px; }
+  .event-item .evt-id { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .event-item .evt-time { font-size: 10px; color: var(--muted); float: right; }
+  .event-item.ANOMALY_DETECTED { border-left: 3px solid var(--red); }
+  .event-item.INCIDENT_OPENED  { border-left: 3px solid var(--orange); }
+  .event-item.RCA_COMPLETED    { border-left: 3px solid var(--yellow); }
+  .event-item.REMEDIATION_PLAN { border-left: 3px solid var(--accent); }
+  .event-item.INCIDENT_RESOLVED{ border-left: 3px solid var(--green); }
+  .event-item.POSTMORTEM_GENERATED { border-left: 3px solid var(--muted); }
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
+  .section-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .links { display: flex; gap: 16px; flex-wrap: wrap; padding: 16px 20px; }
+  .links a { color: var(--accent); text-decoration: none; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .links a:hover { text-decoration: underline; }
+  .truncate { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <div class="live-dot"></div>
+  <h1>🤖 SRE Agent Dashboard</h1>
+  <span style="color:var(--muted); font-size:12px; margin-left:auto;">Auto-refreshing · Incidents powered by Claude AI</span>
+</header>
+<div class="layout">
+  <div class="main">
+
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="label">Total Incidents</div>
+        <div class="value" id="stat-total" style="color:var(--text);">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Avg MTTR</div>
+        <div class="value" id="stat-mttr" style="color:var(--accent);">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">System Status</div>
+        <div class="value" id="stat-status" style="font-size:16px; margin-top:10px; color:var(--green);">🟢 MONITORING</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h2>Active &amp; Recent Incidents</h2></div>
+      <table id="incidents-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Severity</th><th>Type</th><th>Service</th>
+            <th>Status</th><th>Detected</th><th>MTTR</th>
+          </tr>
+        </thead>
+        <tbody id="incidents-tbody">
+          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:32px;">Loading incidents…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h2>Agent Activity Log</h2></div>
+      <table>
+        <thead><tr><th>Time</th><th>Agent</th><th>Event</th><th>Incident</th></tr></thead>
+        <tbody id="events-tbody">
+          <tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="section-header"><h2>Email Notifications</h2></div>
+      <table>
+        <thead><tr><th>Type</th><th>Subject</th><th>Status</th><th>Sent At</th></tr></thead>
+        <tbody id="emails-tbody">
+          <tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="links">
+      <a href="http://localhost:3000" target="_blank">📊 Grafana</a>
+      <a href="http://localhost:8025" target="_blank">📧 Mailhog</a>
+      <a href="http://localhost:8080" target="_blank">🚌 Kafka UI</a>
+      <a href="http://localhost:9090" target="_blank">📈 Prometheus</a>
+      <a href="http://localhost:6333/dashboard" target="_blank">🔮 Qdrant</a>
+      <a href="/docs" target="_blank">📖 API Docs</a>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <h2>Live Event Stream</h2>
+    <div class="event-feed" id="event-feed">
+      <div style="color:var(--muted);font-size:12px;text-align:center;padding:20px;">Waiting for events…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const feed = document.getElementById('event-feed');
+const MAX_FEED = 50;
+
+function timeAgo(ms) {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+
+function addEvent(evt) {
+  const div = document.createElement('div');
+  div.className = 'event-item ' + evt.event_type;
+  const incId = evt.incident_id ? evt.incident_id.substring(0,8).toUpperCase() : '';
+  div.innerHTML = `
+    <span class="evt-time">${timeAgo(evt.received_at)}</span>
+    <div class="evt-type">${evt.event_type.replace(/_/g,' ')}</div>
+    ${incId ? `<div class="evt-id">INC-${incId}</div>` : ''}
+  `;
+  const firstChild = feed.firstElementChild;
+  if (firstChild && firstChild.style.textAlign) feed.innerHTML = '';
+  feed.insertBefore(div, feed.firstChild);
+  while (feed.children.length > MAX_FEED) feed.removeChild(feed.lastChild);
+}
+
+// WebSocket for live events
+function connectWS() {
+  const ws = new WebSocket(`ws://${location.host}/ws/live`);
+  ws.onmessage = e => {
+    const evt = JSON.parse(e.data);
+    addEvent(evt);
+    // Refresh tables on important events
+    if (['ANOMALY_DETECTED','INCIDENT_RESOLVED','RCA_COMPLETED'].includes(evt.event_type)) {
+      loadIncidents();
+      loadAgentEvents();
+    }
+    if (evt.event_type === 'POSTMORTEM_GENERATED') loadEmails();
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+}
+connectWS();
+
+// Load incidents
+async function loadIncidents() {
+  const r = await fetch('/api/incidents?limit=20');
+  const data = await r.json();
+  const tbody = document.getElementById('incidents-tbody');
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:32px;">No incidents yet — waiting for first failure injection…</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map(i => `
+    <tr>
+      <td style="font-family:monospace;font-size:12px;">INC-${i.id.substring(0,8).toUpperCase()}</td>
+      <td><span class="badge ${i.severity}">${i.severity}</span></td>
+      <td class="truncate">${(i.anomaly_type||'').replace(/_/g,' ')}</td>
+      <td class="truncate">${(i.affected_services||[]).join(', ')}</td>
+      <td><span class="badge ${i.status}">${i.status}</span></td>
+      <td style="font-size:12px;color:var(--muted);">${(i.detection_time||'').substring(11,19)}</td>
+      <td style="color:var(--green);">${i.mttr_minutes ? i.mttr_minutes+'m' : '—'}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadAgentEvents() {
+  const r = await fetch('/api/agent-events?limit=30');
+  const data = await r.json();
+  const tbody = document.getElementById('events-tbody');
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px;">No agent events yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map(e => `
+    <tr>
+      <td style="font-size:11px;color:var(--muted);">${(e.created_at||'').substring(11,19)}</td>
+      <td style="color:var(--accent);">${e.agent_name}</td>
+      <td>${(e.event_type||'').replace(/_/g,' ')}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted);">${e.incident_id ? 'INC-'+e.incident_id.substring(0,8).toUpperCase() : '—'}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadEmails() {
+  const r = await fetch('/api/emails?limit=20');
+  const data = await r.json();
+  const tbody = document.getElementById('emails-tbody');
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px;">No emails sent yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map(e => `
+    <tr>
+      <td style="color:var(--accent);">${(e.notification_type||'').replace(/_/g,' ')}</td>
+      <td class="truncate" style="max-width:200px;">${e.subject||''}</td>
+      <td><span class="badge ${e.status}">${e.status}</span></td>
+      <td style="font-size:11px;color:var(--muted);">${(e.sent_at||'').substring(11,19)}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadStats() {
+  const r = await fetch('/api/stats');
+  const d = await r.json();
+  document.getElementById('stat-total').textContent = d.total_incidents || 0;
+  document.getElementById('stat-mttr').textContent = d.avg_mttr_minutes ? d.avg_mttr_minutes + 'm' : '—';
+}
+
+// Initial load + periodic refresh
+loadIncidents();
+loadAgentEvents();
+loadEmails();
+loadStats();
+setInterval(loadIncidents, 15000);
+setInterval(loadAgentEvents, 10000);
+setInterval(loadEmails, 20000);
+setInterval(loadStats, 30000);
+</script>
+</body>
+</html>

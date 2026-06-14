@@ -1,0 +1,370 @@
+version: '3.8'
+
+networks:
+  sre-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  qdrant-data:
+  prometheus-data:
+  grafana-data:
+
+x-common-env: &common-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: sre_agent
+  POSTGRES_USER: sre_user
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sre_password}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  LOG_LEVEL: INFO
+
+services:
+
+  # ─────────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────────
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    hostname: zookeeper
+    networks: [sre-net]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc localhost 2181 | grep -q Mode"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    hostname: kafka
+    networks: [sre-net]
+    ports:
+      - "9092:9092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 40s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    networks: [sre-net]
+    ports:
+      - "8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: sre-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+  qdrant:
+    image: qdrant/qdrant:v1.8.0
+    hostname: qdrant
+    networks: [sre-net]
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/health | grep -q '\"status\":\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  postgres:
+    image: postgres:15-alpine
+    hostname: postgres
+    networks: [sre-net]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: sre_agent
+      POSTGRES_USER: sre_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sre_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sre_user -d sre_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    networks: [sre-net]
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:v2.49.0
+    hostname: prometheus
+    networks: [sre-net]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    hostname: grafana
+    networks: [sre-net]
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/sre-overview.json
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    hostname: mailhog
+    networks: [sre-net]
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  # ─────────────────────────────────────────────
+  # INIT JOBS
+  # ─────────────────────────────────────────────
+
+  knowledge-seeder:
+    build:
+      context: .
+      dockerfile: knowledge/seeder/Dockerfile
+    networks: [sre-net]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    restart: on-failure:3
+
+  # ─────────────────────────────────────────────
+  # SIMULATION
+  # ─────────────────────────────────────────────
+
+  event-simulator:
+    build:
+      context: .
+      dockerfile: simulation/event-simulator/Dockerfile
+    hostname: event-simulator
+    networks: [sre-net]
+    ports:
+      - "8100:8100"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      knowledge-seeder:
+        condition: service_completed_successfully
+    environment:
+      <<: *common-env
+      METRICS_PORT: "8100"
+      FAILURE_INTERVAL_MIN_SECONDS: "300"
+      FAILURE_INTERVAL_MAX_SECONDS: "600"
+      INITIAL_QUIET_PERIOD_SECONDS: "60"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # AGENTS
+  # ─────────────────────────────────────────────
+
+  detection-agent:
+    build:
+      context: .
+      dockerfile: agents/detection/Dockerfile
+    hostname: detection-agent
+    networks: [sre-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      event-simulator:
+        condition: service_started
+    environment:
+      <<: *common-env
+      SIGMA_THRESHOLD: "2.5"
+      DEDUP_TTL_SECONDS: "300"
+      BASELINE_WINDOW_SIZE: "50"
+    restart: unless-stopped
+
+  correlation-agent:
+    build:
+      context: .
+      dockerfile: agents/correlation/Dockerfile
+    hostname: correlation-agent
+    networks: [sre-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      CONTEXT_WINDOW_MINUTES: "30"
+    restart: unless-stopped
+
+  investigation-agent:
+    build:
+      context: .
+      dockerfile: agents/investigation/Dockerfile
+    hostname: investigation-agent
+    networks: [sre-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      knowledge-seeder:
+        condition: service_completed_successfully
+    environment:
+      <<: *common-env
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      RESOLUTION_CHECK_INTERVAL_SECONDS: "30"
+      RESOLUTION_CONSECUTIVE_NORMAL_READINGS: "3"
+    restart: unless-stopped
+
+  remediation-agent:
+    build:
+      context: .
+      dockerfile: agents/remediation/Dockerfile
+    hostname: remediation-agent
+    networks: [sre-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      knowledge-seeder:
+        condition: service_completed_successfully
+    environment:
+      <<: *common-env
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    restart: unless-stopped
+
+  communication-agent:
+    build:
+      context: .
+      dockerfile: agents/communication/Dockerfile
+    hostname: communication-agent
+    networks: [sre-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    environment:
+      <<: *common-env
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      EMAIL_FROM: sre-agent@company.com
+      EMAIL_ONCALL: oncall@company.com
+      EMAIL_TEAM: engineering@company.com
+      EMAIL_MANAGEMENT: management@company.com
+    restart: unless-stopped
+
+  postmortem-agent:
+    build:
+      context: .
+      dockerfile: agents/postmortem/Dockerfile
+    hostname: postmortem-agent
+    networks: [sre-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # APPLICATION
+  # ─────────────────────────────────────────────
+
+  sre-api:
+    build:
+      context: .
+      dockerfile: application/sre-api/Dockerfile
+    hostname: sre-api
+    networks: [sre-net]
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+    restart: unless-stopped
