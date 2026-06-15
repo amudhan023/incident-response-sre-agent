@@ -6,6 +6,85 @@
 
 ---
 
+## Quick Start
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Docker | 24+ | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
+| Docker Compose | v2 (Compose V2) | Bundled with Docker Desktop; verify with `docker compose version` |
+| Anthropic API Key | — | [console.anthropic.com](https://console.anthropic.com) — any tier works |
+| Available RAM | 8 GB minimum | 16 GB recommended (Kafka + Qdrant + 6 agents + Postgres + Redis) |
+| Available Disk | 5 GB free | Docker images + Qdrant persistent volume |
+| OS | macOS / Linux / WSL2 | Windows requires WSL2 with Docker Desktop |
+
+> **No Python, no Node, no other tooling required.** Everything runs inside Docker containers.
+
+### One-command demo
+
+```bash
+# 1. Clone and configure
+git clone https://github.com/amudhan023/incident-response-sre-agent.git
+cd incident-response-sre-agent
+cp .env.example .env
+# Open .env and set: ANTHROPIC_API_KEY=sk-ant-...
+
+# 2. Start everything (builds images on first run, ~3–5 min)
+make demo
+
+# 3. Wait ~3 minutes for full initialisation, then open:
+open http://localhost:8000          # SRE Dashboard — live incident feed
+open http://localhost:8025          # Mailhog — watch 5 emails arrive per incident
+open http://localhost:3000          # Grafana (admin / admin) — live service metrics
+open http://localhost:8080          # Kafka UI — inspect topic flow message by message
+open http://localhost:6333/dashboard  # Qdrant — browse vector collections
+
+# 4. Follow agent logs in real time
+make logs
+
+# First failure injection occurs ~60 seconds after the simulator starts.
+# Check Mailhog — five structured HTML emails arrive automatically per incident.
+```
+
+### What Happens Automatically
+
+```
+t=0s    16 Docker services start with enforced health-check ordering
+t=30s   Knowledge seeder: embeds 20 incidents + 7 runbooks + 6 service docs → Qdrant
+t=60s   Event simulator: 6 services emit metrics + logs to Kafka every 10 seconds
+t=120s  First failure injected (random from 7 scenarios, gradual ramp)
+t=135s  Detection Agent: z-score breach → Claude Haiku → anomalies.detected
+        Email 1: 🚨 Incident Alert with deviation sigma and anomaly score
+t=145s  Correlation Agent: blast radius + deployment check → incidents.opened
+t=180s  Investigation Agent: 3-4 Claude tool calls against Qdrant → rca.completed
+        Email 2: 🔍 Root Cause Analysis with confidence score and evidence
+t=190s  Remediation Agent: runbook retrieval + action plan → remediation.plans
+        Email 3: 🛠️ Remediation Plan with prioritised steps and rollback procedures
+t=500s  Metrics normalise → incidents.resolved (MTTR calculated)
+        Email 4: ✅ Incident Resolved with MTTR in minutes
+t=510s  Postmortem Agent: timeline from DB → Claude Sonnet → postmortems.generated
+        Email 5: 📋 Postmortem with blameless analysis and action items
+```
+
+### Make Targets
+
+| Command | Description |
+|---|---|
+| `make demo` | Build all images and start full stack |
+| `make start` | Start without rebuilding |
+| `make stop` | Stop all services |
+| `make clean` | Stop + remove all volumes (full reset) |
+| `make logs` | Follow all 6 agent logs |
+| `make logs-sim` | Follow event simulator only |
+| `make logs-api` | Follow SRE API only |
+| `make status` | Show Docker Compose health (`docker compose ps`) |
+| `make build` | Pre-build all images |
+| `make seed` | Re-run knowledge seeder only |
+| `make restart-agents` | Restart all 6 agents |
+
+---
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         SYSTEM AT A GLANCE                                  │
@@ -35,27 +114,27 @@
 
 ## Table of Contents
 
-1. [Problem Statement](#1-problem-statement)
-2. [Solution Overview](#2-solution-overview)
-3. [End-to-End Architecture](#3-end-to-end-architecture)
-4. [Kafka Topic Pipeline](#4-kafka-topic-pipeline)
-5. [Agent Pipeline Deep-Dive](#5-agent-pipeline-deep-dive)
-6. [Investigation Agent — Agentic Tool-Use Loop](#6-investigation-agent--agentic-tool-use-loop)
-7. [RAG Architecture](#7-rag-architecture)
-8. [Vector Store Design](#8-vector-store-design)
-9. [Incident Lifecycle & State Machine](#9-incident-lifecycle--state-machine)
-10. [Full Execution Walkthrough](#10-full-execution-walkthrough)
-11. [Data Flow Diagram](#11-data-flow-diagram)
-12. [Error Handling & Retry Logic](#12-error-handling--retry-logic)
-13. [Observability Architecture](#13-observability-architecture)
-14. [Scalability Design](#14-scalability-design)
-15. [Security Architecture](#15-security-architecture)
-16. [Deployment Architecture](#16-deployment-architecture)
-17. [Project Structure](#17-project-structure)
-18. [Quick Start](#18-quick-start)
+1. [Quick Start](#quick-start)
+2. [Problem Statement](#2-problem-statement)
+3. [Solution Overview](#3-solution-overview)
+4. [End-to-End Architecture](#4-end-to-end-architecture)
+5. [Kafka Topic Pipeline](#5-kafka-topic-pipeline)
+6. [Agent Pipeline Deep-Dive](#6-agent-pipeline-deep-dive)
+7. [Investigation Agent — Agentic Tool-Use Loop](#7-investigation-agent--agentic-tool-use-loop)
+8. [RAG Architecture](#8-rag-architecture)
+9. [Vector Store Design](#9-vector-store-design)
+10. [Incident Lifecycle & State Machine](#10-incident-lifecycle--state-machine)
+11. [Full Execution Walkthrough](#11-full-execution-walkthrough)
+12. [Data Flow Diagram](#12-data-flow-diagram)
+13. [Error Handling & Retry Logic](#13-error-handling--retry-logic)
+14. [Observability Architecture](#14-observability-architecture)
+15. [Scalability Design](#15-scalability-design)
+16. [Security Architecture](#16-security-architecture)
+17. [Deployment Architecture](#17-deployment-architecture)
+18. [Project Structure](#18-project-structure)
 19. [Service Catalogue](#19-service-catalogue)
 20. [Failure Scenarios](#20-failure-scenarios)
-21. [Why This Demonstrates Staff-Level Engineering](#21-why-this-demonstrates-staff-level-engineering)
+21. [Technical Highlights](#21-technical-highlights)
 22. [Roadmap](#22-roadmap)
 
 ---
@@ -943,11 +1022,6 @@ incident-response-sre-agent/
 │   ├── communication/
 │   │   ├── src/main.py             ← 5 handlers, Jinja2, SMTP retry
 │   │   └── templates/              ← HTML email templates per lifecycle stage
-│   │       ├── incident_opened.html
-│   │       ├── rca_available.html
-│   │       ├── remediation_plan.html
-│   │       ├── incident_resolved.html
-│   │       └── postmortem_ready.html
 │   └── postmortem/
 │       └── src/main.py             ← Timeline from DB + Sonnet long-form document
 │
@@ -959,114 +1033,27 @@ incident-response-sre-agent/
 │   └── llm_client.py               ← Anthropic SDK: chat(), run_tool_use_agent(), retry
 │
 ├── knowledge/
-│   ├── incidents/
-│   │   └── incidents.json          ← 20 historical incidents with root_cause + resolution
+│   ├── incidents/incidents.json    ← 20 historical incidents with root_cause + resolution
 │   ├── runbooks/                   ← 7 operational runbooks in Markdown
-│   │   ├── high-latency-api.md
-│   │   ├── database-connection-exhaustion.md
-│   │   ├── kafka-consumer-lag.md
-│   │   ├── memory-leak.md
-│   │   ├── cpu-saturation.md
-│   │   ├── error-rate-spike.md
-│   │   └── deployment-rollback.md
-│   ├── architecture/
-│   │   └── services.json           ← 6 services: team, SLA, dependencies, failure modes
-│   └── seeder/
-│       └── src/main.py             ← One-shot Qdrant population: embed + upsert + verify
+│   ├── architecture/services.json  ← 6 services: team, SLA, dependencies, failure modes
+│   └── seeder/src/main.py          ← One-shot Qdrant population: embed + upsert + verify
 │
 ├── simulation/
-│   └── event-simulator/
-│       └── src/main.py             ← 7 failure scenarios, gradual ramp, /metrics endpoint
+│   └── event-simulator/src/main.py ← 7 failure scenarios, gradual ramp, /metrics endpoint
 │
 ├── application/
-│   └── sre-api/
-│       ├── src/main.py             ← FastAPI, WebSocket live stream, incident queries
-│       └── src/templates/
-│           └── dashboard.html      ← Real-time incident dashboard
+│   └── sre-api/src/main.py         ← FastAPI, WebSocket live stream, incident queries
 │
 ├── infrastructure/
 │   ├── postgres/init.sql           ← Schema: incidents, agent_events, emails + indexes
 │   ├── prometheus/prometheus.yml   ← Scrape config: event-simulator :8100
-│   └── grafana/
-│       ├── dashboards/sre-overview.json   ← Pre-built SRE metrics dashboard
-│       └── provisioning/                  ← Auto-configure datasource + dashboard
+│   └── grafana/                    ← Auto-provisioned datasource + pre-built dashboard
 │
 ├── docker-compose.yml              ← Full 16-service stack with health checks + ordering
 ├── Makefile                        ← make demo / stop / logs / clean / status
 ├── .env.example                    ← Only ANTHROPIC_API_KEY required
 └── DESIGN.md                       ← Staff engineer architecture document
 ```
-
----
-
-## 18. Quick Start
-
-### Prerequisites
-
-- Docker + Docker Compose
-- Anthropic API key — [console.anthropic.com](https://console.anthropic.com)
-
-### One-command demo
-
-```bash
-# 1. Clone and configure
-git clone https://github.com/amudhan023/incident-response-sre-agent.git
-cd incident-response-sre-agent
-cp .env.example .env
-# Set ANTHROPIC_API_KEY=sk-ant-... in .env
-
-# 2. Start everything
-make demo
-
-# 3. Wait ~3 minutes for full initialisation, then open:
-open http://localhost:8000    # SRE Dashboard (live incident feed)
-open http://localhost:8025    # Mailhog — watch 5 emails arrive per incident
-open http://localhost:3000    # Grafana (admin / admin) — live service metrics
-open http://localhost:8080    # Kafka UI — inspect topic flow message by message
-open http://localhost:6333/dashboard  # Qdrant — browse vector collections
-
-# 4. Watch the agents work in real time
-make logs
-
-# First failure injection occurs ~60 seconds after simulator starts.
-# Check Mailhog — five HTML emails arrive automatically per incident.
-```
-
-### What Happens Automatically
-
-```
-t=0s    16 Docker services start (infrastructure health checks enforced)
-t=30s   Knowledge seeder runs: embeds 20 incidents + 7 runbooks + 6 service docs → Qdrant
-t=60s   Event simulator begins: 6 services emit metrics + logs to Kafka every 10s
-t=120s  First failure injected (random from 7 scenarios)
-t=135s  Detection Agent: z-score breach → Claude Haiku → anomalies.detected
-        Email 1: 🚨 Incident Alert with deviation and anomaly score
-t=145s  Correlation Agent: blast radius + deployment check → incidents.opened
-t=180s  Investigation Agent: 3-4 Claude tool calls against Qdrant → rca.completed
-        Email 2: 🔍 Root Cause Analysis with confidence score and evidence
-t=190s  Remediation Agent: runbook retrieval + action plan → remediation.plans
-        Email 3: 🛠️ Remediation Plan with prioritised steps and rollback procedures
-t=500s  Metrics normalise → incidents.resolved (MTTR tracked)
-        Email 4: ✅ Incident Resolved with MTTR
-t=510s  Postmortem Agent: timeline from DB → Claude → postmortems.generated
-        Email 5: 📋 Postmortem with blameless analysis and action items
-```
-
-### Make Targets
-
-| Command | Description |
-|---|---|
-| `make demo` | Build all images and start full stack |
-| `make start` | Start without rebuilding |
-| `make stop` | Stop all services |
-| `make clean` | Stop + remove all volumes (full reset) |
-| `make logs` | Follow all 6 agent logs |
-| `make logs-sim` | Follow event simulator only |
-| `make logs-api` | Follow SRE API only |
-| `make status` | Show Docker Compose health (`docker compose ps`) |
-| `make build` | Pre-build all images |
-| `make seed` | Re-run knowledge seeder only |
-| `make restart-agents` | Restart all 6 agents |
 
 ---
 
@@ -1120,7 +1107,7 @@ Each scenario:
 
 ---
 
-## 21. Why This Demonstrates Staff-Level Engineering
+## 21. Technical Highlights
 
 <details>
 <summary><strong>Distributed Systems Design</strong></summary>
